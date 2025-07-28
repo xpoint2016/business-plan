@@ -1,0 +1,481 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+// ----------------------------------------------------------------------
+// 1. CONFIGURACIÓN Y CONSTANTES
+// ----------------------------------------------------------------------
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+const SECTIONS = [
+    { id: 'introduction', title: 'Introducción', subsections: [
+        { id: 'customer-problem', title: 'Problema del Cliente' },
+        { id: 'products-services', title: 'Productos y Servicios' },
+        { id: 'branding-icons', title: 'Iconos/Paletas de Marca' },
+    ]},
+    { id: 'business-model', title: 'Modelo de Negocio', subsections: [] },
+    { id: 'charts', title: 'Gráficos', subsections: [
+        { id: 'sales-forecast-y1', title: 'Previsión de Ventas (Año 1)' },
+        { id: 'sales-forecast-y2-3', title: 'Previsión de Ventas (Año 2-3)' },
+        { id: 'target-market', title: 'Mercado Objetivo' },
+        { id: 'sales-marketing-ideas', title: 'Ideas de Ventas y Marketing' },
+        { id: 'competitive-advantage', title: 'Ventaja Competitiva' },
+    ]},
+    { id: 'company-overview', title: 'Visión General de la Empresa', subsections: [
+        { id: 'co-problem-statement', title: 'Declaración del Problema' },
+        { id: 'industry-background', title: 'Antecedentes de la Industria' },
+        { id: 'management-team', title: 'Equipo Directivo' },
+        { id: 'market-research', title: 'Investigación de Mercado' },
+        { id: 'organizational-structure', title: 'Estructura Organizativa' },
+        { id: 'swot-analysis', title: 'Análisis FODA' },
+    ]},
+    { id: 'products-services-details', title: 'Detalles de Productos y Servicios', subsections: [
+        { id: 'unique-selling-proposition', title: 'Propuesta de Venta Única' },
+        { id: 'pricing-structure', title: 'Estructura de Precios' },
+        { id: 'production-process', title: 'Proceso de Producción' },
+        { id: 'intellectual-property', title: 'Propiedad Intelectual' },
+        { id: 'regulatory-considerations', title: 'Consideraciones Regulatorias' },
+    ]},
+    { id: 'marketing-sales', title: 'Marketing y Ventas', subsections: [
+        { id: 'branding-strategy', title: 'Estrategia de Marca' },
+        { id: 'sales-relationships', title: 'Relaciones de Ventas' },
+        { id: 'customer-strategy', title: 'Estrategia de Cliente' },
+        { id: 'distribution-channels', title: 'Canales de Distribución' },
+        { id: 'ms-pricing-strategy', title: 'Estrategia de Precios' },
+        { id: 'advertising-promotion', title: 'Publicidad y Promoción' },
+        { id: 'performance-metrics', title: 'Métricas de Rendimiento' },
+        { id: 'marketing-funnel', title: 'Embudo de Marketing' },
+    ]},
+    { id: 'operations', title: 'Operaciones', subsections: [
+        { id: 'supply-chain', title: 'Cadena de Suministro' },
+        { id: 'op-production-process', title: 'Proceso de Producción' },
+        { id: 'facility-management', title: 'Gestión de Instalaciones' },
+        { id: 'quality-control', title: 'Control de Calidad' },
+        { id: 'inventory-management', 'title': 'Gestión de Inventario' },
+        { id: 'logistics-distribution', title: 'Logística y Distribución' },
+        { id: 'op-risk-management', title: 'Gestión de Riesgos' },
+    ]},
+    { id: 'financial-plan', title: 'Plan Financiero', subsections: [
+        { id: 'fp-sales-forecast-y1', title: 'Previsión de Ventas (Año 1)' },
+        { id: 'fp-sales-forecast-y2-3', title: 'Previsión de Ventas (Año 2-3)' },
+        { id: 'cost-expense-forecast', title: 'Previsión de Costes y Gastos' },
+        { id: 'profit-loss-forecast', title: 'Previsión de Pérdidas y Ganancias' },
+        { id: 'cashflow-forecast', title: 'Previsión de Flujo de Caja' },
+        { id: 'balance-sheet', title: 'Balance General' },
+    ]},
+    { id: 'risk-analysis', title: 'Análisis de Riesgos', subsections: [
+        { id: 'market-risks', title: 'Riesgos de Mercado' },
+        { id: 'financial-risks', title: 'Riesgos Financieros' },
+        { id: 'operational-risks', title: 'Riesgos Operacionales' },
+        { id: 'legal-risks', title: 'Riesgos Legales' },
+        { id: 'technology-risks', title: 'Riesgos Tecnológicos' },
+        { id: 'reputational-risks', title: 'Riesgos Reputacionales' },
+        { id: 'mitigation-strategies', title: 'Estrategias de Mitigación' },
+    ]},
+];
+
+// ----------------------------------------------------------------------
+// 2. SERVICIOS DE API (Firebase y Gemini)
+// ----------------------------------------------------------------------
+
+// Módulo de servicio de Firebase
+const firebaseService = (() => {
+    let app, db, auth;
+    try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+    } catch (error) {
+        console.error("Error initializing Firebase:", error);
+    }
+
+    return {
+        getAuthInstance: () => auth,
+        saveBusinessPlan: async (userId, dataToSave) => {
+            if (!userId || !db) throw new Error("Firebase not initialized or user not logged in.");
+            const planDocRef = doc(db, `artifacts/${appId}/users/${userId}/businessPlans/myPlan`);
+            await setDoc(planDocRef, dataToSave, { merge: true });
+        },
+        loadBusinessPlan: async (userId) => {
+            if (!userId || !db) throw new Error("Firebase not initialized or user not logged in.");
+            const planDocRef = doc(db, `artifacts/${appId}/users/${userId}/businessPlans/myPlan`);
+            const docSnap = await getDoc(planDocRef);
+            return docSnap.exists() ? docSnap.data() : {};
+        },
+    };
+})();
+
+// Módulo de servicio de Gemini
+const geminiService = {
+    generateContent: async (section, subsection, userInput) => {
+        const currentTitle = subsection?.title || section?.title;
+        let promptText = `Genera el contenido para la sección de plan de negocios "${currentTitle}" basándote en la siguiente información: ${userInput}`;
+        let generationConfig = {};
+        let isStructuredResponseExpected = false;
+
+        if (section?.id === 'charts' && (subsection?.id === 'sales-forecast-y1' || subsection?.id === 'sales-forecast-y2-3')) {
+            isStructuredResponseExpected = true;
+            promptText = `Calcula y genera la previsión de ventas para la sección "${currentTitle}" de un plan de negocios. Basándote en la siguiente información, genera tanto una descripción textual como un array de objetos JSON con los datos de ventas mensuales. Información: ${userInput}. Considera: Empezar con 6 puntos de venta, cada uno vendiendo 20 paquetes de 6 chorizos por quincena (2 quincenas/mes). Aumentar 3 puntos de venta adicionales cada mes por los primeros 6 meses. Para los siguientes 6 meses, el enfoque es en "Restaurantes". Estima un crecimiento razonable. Formato de la respuesta JSON (solo el JSON): {"text": "descripción...", "salesData": [{"month": "Mes 1", "sales": 1440}, ...]}`;
+            generationConfig = { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { text: { type: "STRING" }, salesData: { type: "ARRAY", items: { type: "OBJECT", properties: { month: { type: "STRING" }, sales: { type: "NUMBER" } } } } } } };
+        } else if (subsection?.id === 'swot-analysis') {
+            isStructuredResponseExpected = true;
+            promptText = `Genera un análisis FODA (Fortalezas, Oportunidades, Debilidades, Amenazas) para un plan de negocios basado en la siguiente descripción: ${userInput}. La respuesta debe ser un objeto JSON con las claves 'strengths', 'weaknesses', 'opportunities' y 'threats', cada una con un array de strings. Formato JSON (solo el JSON): {"strengths": ["F1"], "weaknesses": ["D1"], "opportunities": ["O1"], "threats": ["A1"]}`;
+            generationConfig = { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { strengths: { type: "ARRAY", items: { type: "STRING" } }, weaknesses: { type: "ARRAY", items: { type: "STRING" } }, opportunities: { type: "ARRAY", items: { type: "STRING" } }, threats: { type: "ARRAY", items: { type: "STRING" } } } } };
+        }
+
+        const payload = { contents: [{ role: "user", parts: [{ text: promptText }] }], generationConfig };
+        const apiKey = ""; // Proporcionada en runtime por Canvas
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+        const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!response.ok) throw new Error(`Error de la API de Gemini: ${response.statusText}`);
+
+        const result = await response.json();
+        const responseContent = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!responseContent) throw new Error('Respuesta inesperada de Gemini.');
+        
+        if (!isStructuredResponseExpected) {
+            return { text: responseContent, chart: null, swot: null };
+        }
+
+        try {
+            const parsedJson = JSON.parse(responseContent);
+            if (subsection?.id === 'swot-analysis') {
+                const swotText = `Análisis FODA:\n\nFortalezas:\n- ${parsedJson.strengths?.join('\n- ') || 'N/A'}\n\nDebilidades:\n- ${parsedJson.weaknesses?.join('\n- ') || 'N/A'}\n\nOportunidades:\n- ${parsedJson.opportunities?.join('\n- ') || 'N/A'}\n\nAmenazas:\n- ${parsedJson.threats?.join('\n- ') || 'N/A'}`;
+                return { text: swotText, swot: parsedJson, chart: null };
+            }
+            if (section?.id === 'charts') {
+                 const chartData = parsedJson.salesData?.map(item => ({ ...item, sales: Number(item.sales) })) || [];
+                 const chartConfig = { type: 'BarChart', data: chartData, title: currentTitle, xAxisLabel: 'Periodo', yAxisLabel: 'Ventas' };
+                 return { text: parsedJson.text || '', chart: chartConfig, swot: null };
+            }
+        } catch (jsonError) {
+            console.error("Error al parsear JSON de Gemini:", jsonError);
+            return { text: responseContent, chart: null, swot: null }; // Fallback a texto plano
+        }
+    },
+};
+
+
+// ----------------------------------------------------------------------
+// 3. HOOKS PERSONALIZADOS
+// ----------------------------------------------------------------------
+
+// Hook para manejar la autenticación
+const useAuth = () => {
+    const [userId, setUserId] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        const auth = firebaseService.getAuthInstance();
+        if (!auth) {
+            setError("Firebase Auth no se inicializó.");
+            setLoading(false);
+            return;
+        }
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            try {
+                let currentUserId = user?.uid;
+                if (!currentUserId) {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    currentUserId = auth.currentUser?.uid;
+                }
+                setUserId(currentUserId || crypto.randomUUID());
+            } catch (err) {
+                console.error("Error de autenticación:", err);
+                setError("Error al autenticarse.");
+                setUserId(crypto.randomUUID()); // Fallback
+            } finally {
+                setLoading(false);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+    return { userId, loading, error };
+};
+
+// Hook para manejar el estado y la lógica del plan de negocios
+const useBusinessPlan = (userId) => {
+    const [data, setData] = useState({});
+    const [status, setStatus] = useState('idle'); // 'idle', 'loading', 'saving', 'generating', 'error'
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (userId) {
+            setStatus('loading');
+            firebaseService.loadBusinessPlan(userId)
+                .then(setData)
+                .catch(err => {
+                    setError(err.message);
+                    setStatus('error');
+                })
+                .finally(() => setStatus('idle'));
+        }
+    }, [userId]);
+
+    const savePlan = useCallback(async (dataToSave) => {
+        if (!userId) return;
+        setStatus('saving');
+        setError('');
+        try {
+            await firebaseService.saveBusinessPlan(userId, dataToSave);
+        } catch (err) {
+            setError(`Error al guardar: ${err.message}`);
+            setStatus('error');
+        } finally {
+            setStatus('idle');
+        }
+    }, [userId]);
+
+    const generateContent = useCallback(async (section, subsection, userInput) => {
+        if (!userInput.trim()) {
+            setError('Por favor, introduce algo de texto.');
+            setStatus('error');
+            return;
+        }
+        setStatus('generating');
+        setError('');
+        try {
+            const currentKey = subsection?.id || section.id;
+            const newContent = await geminiService.generateContent(section, subsection, userInput);
+            const updatedData = { ...data, [currentKey]: newContent };
+            setData(updatedData);
+            await firebaseService.saveBusinessPlan(userId, updatedData); // Auto-guardado
+        } catch (err) {
+            setError(`Error al generar contenido: ${err.message}`);
+            setStatus('error');
+        } finally {
+            setStatus('idle');
+        }
+    }, [userId, data]);
+
+    return { data, status, error, savePlan, generateContent, setError };
+};
+
+// ----------------------------------------------------------------------
+// 4. COMPONENTES DE UI
+// ----------------------------------------------------------------------
+
+const Sidebar = ({ sections, selectedSection, selectedSubsection, onSectionSelect, onSubsectionSelect, userId }) => (
+    <div className="w-64 bg-white shadow-lg p-6 overflow-y-auto rounded-r-lg flex-shrink-0">
+        <h1 className="text-2xl font-bold text-gray-800 mb-2">Plan de Negocios AI</h1>
+        <p className="text-xs text-gray-500 mb-6 break-words">ID: {userId || 'Cargando...'}</p>
+        {sections.map(section => (
+            <div key={section.id} className="mb-4">
+                <button
+                    onClick={() => onSectionSelect(section.id)}
+                    className={`w-full text-left py-2 px-3 rounded-lg transition-colors duration-200 ${selectedSection === section.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-gray-200'}`}
+                >
+                    {section.title}
+                </button>
+                {selectedSection === section.id && section.subsections.length > 0 && (
+                    <div className="ml-4 mt-2 space-y-1">
+                        {section.subsections.map(sub => (
+                            <button
+                                key={sub.id}
+                                onClick={() => onSubsectionSelect(sub.id)}
+                                className={`w-full text-left py-1 px-2 rounded-md transition-colors duration-200 text-sm ${selectedSubsection === sub.id ? 'bg-blue-200 text-blue-800 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}
+                            >
+                                {sub.title}
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+        ))}
+    </div>
+);
+
+const GeneratedContent = ({ content }) => {
+    const { text, chart, swot } = content || {};
+    return (
+        <div className="mt-8">
+            <h3 className="text-xl font-semibold text-gray-800 mb-4">Contenido Generado:</h3>
+            <div className="bg-gray-50 p-6 rounded-lg border border-gray-200 min-h-[200px] text-gray-800 whitespace-pre-wrap">
+                {text || 'El contenido generado aparecerá aquí.'}
+                {chart && chart.data && (
+                    <div className="mt-6">
+                        <h4 className="text-lg font-semibold text-gray-700 mb-3">{chart.title}</h4>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <BarChart data={chart.data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="month" />
+                                <YAxis />
+                                <Tooltip />
+                                <Legend />
+                                <Bar dataKey="sales" fill="#8884d8" name="Ventas" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                )}
+                {swot && (
+                    <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                            <p className="font-bold text-green-700">Fortalezas:</p>
+                            <ul className="list-disc list-inside text-gray-700 mt-1">
+                                {swot.strengths?.map((item, i) => <li key={`s-${i}`}>{item}</li>)}
+                            </ul>
+                        </div>
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                            <p className="font-bold text-red-700">Debilidades:</p>
+                            <ul className="list-disc list-inside text-gray-700 mt-1">
+                                {swot.weaknesses?.map((item, i) => <li key={`w-${i}`}>{item}</li>)}
+                            </ul>
+                        </div>
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                            <p className="font-bold text-blue-700">Oportunidades:</p>
+                            <ul className="list-disc list-inside text-gray-700 mt-1">
+                                {swot.opportunities?.map((item, i) => <li key={`o-${i}`}>{item}</li>)}
+                            </ul>
+                        </div>
+                        <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                            <p className="font-bold text-purple-700">Amenazas:</p>
+                            <ul className="list-disc list-inside text-gray-700 mt-1">
+                                {swot.threats?.map((item, i) => <li key={`t-${i}`}>{item}</li>)}
+                            </ul>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const MainContent = ({ section, subsection, content, onGenerate, onSave, status, error, clearError, businessPlanData }) => {
+    const [userInput, setUserInput] = useState('');
+    const title = subsection?.title || section?.title || 'Selecciona una Sección';
+
+    useEffect(() => {
+        setUserInput(''); // Limpiar input al cambiar de sección
+    }, [section, subsection]);
+
+    const isSalesForecast = section?.id === 'charts' && (subsection?.id === 'sales-forecast-y1' || subsection?.id === 'sales-forecast-y2-3');
+    const isSwot = subsection?.id === 'swot-analysis';
+    const isLoading = status === 'loading' || status === 'generating';
+    const isSaving = status === 'saving';
+
+    const getPlaceholder = () => {
+        if (isSalesForecast) return `Describe tu previsión de ventas (ej: empezar con 6 puntos de venta, aumentar 3 cada mes por 6 meses, luego enfocarse en restaurantes)...`;
+        if (isSwot) return `Describe tu negocio, industria, y cualquier factor interno o externo relevante para el análisis FODA...`;
+        return `Describe tu negocio o lo que necesitas para la sección de "${title}"...`;
+    };
+
+    return (
+        <div className="flex-1 flex flex-col p-8 overflow-hidden">
+            <div className="bg-white p-8 rounded-lg shadow-lg flex-1 overflow-y-auto">
+                <h2 className="text-3xl font-semibold text-gray-800 mb-6">{title}</h2>
+
+                {error && (
+                    <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 relative" role="alert">
+                        <p className="font-bold">Error</p>
+                        <p>{error}</p>
+                        <button onClick={clearError} className="absolute top-0 bottom-0 right-0 px-4 py-3">
+                            <span className="text-2xl">&times;</span>
+                        </button>
+                    </div>
+                )}
+
+                <div className="mb-6">
+                    <label htmlFor="userInput" className="block text-gray-700 text-sm font-bold mb-2">Tu entrada para {title}:</label>
+                    <textarea
+                        id="userInput"
+                        className="shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent h-32 resize-y"
+                        placeholder={getPlaceholder()}
+                        value={userInput}
+                        onChange={(e) => setUserInput(e.target.value)}
+                    />
+                </div>
+
+                <div className="flex items-center space-x-4 mb-8">
+                    <button
+                        onClick={() => onGenerate(section, subsection, userInput)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 disabled:bg-blue-300 disabled:cursor-not-allowed"
+                        disabled={isLoading || isSaving}
+                    >
+                        {status === 'generating' ? 'Generando...' : 'Generar Contenido ✨'}
+                    </button>
+                    <button
+                        onClick={() => onSave(businessPlanData)}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 disabled:bg-green-300 disabled:cursor-not-allowed"
+                        disabled={isLoading || isSaving}
+                    >
+                        {isSaving ? 'Guardando...' : 'Guardar Plan'}
+                    </button>
+                    {isLoading && <div className="text-blue-600">Cargando...</div>}
+                </div>
+                
+                <GeneratedContent content={content} />
+            </div>
+        </div>
+    );
+};
+
+
+// ----------------------------------------------------------------------
+// 5. COMPONENTE PRINCIPAL (APP)
+// ----------------------------------------------------------------------
+
+const App = () => {
+    // Estado de la UI
+    const [selectedSectionId, setSelectedSectionId] = useState(SECTIONS[0].id);
+    const [selectedSubsectionId, setSelectedSubsectionId] = useState(SECTIONS[0].subsections[0]?.id || null);
+
+    // Hooks personalizados para la lógica
+    const { userId, loading: authLoading, error: authError } = useAuth();
+    const { data: businessPlanData, status, error: planError, savePlan, generateContent, setError: setPlanError } = useBusinessPlan(userId);
+
+    // Selecciones actuales
+    const currentSection = useMemo(() => SECTIONS.find(s => s.id === selectedSectionId), [selectedSectionId]);
+    const currentSubsection = useMemo(() => currentSection?.subsections.find(sub => sub.id === selectedSubsectionId), [currentSection, selectedSubsectionId]);
+
+    const handleSectionSelect = (id) => {
+        const section = SECTIONS.find(s => s.id === id);
+        setSelectedSectionId(id);
+        setSelectedSubsectionId(section?.subsections[0]?.id || null);
+    };
+    
+    const currentContentKey = selectedSubsectionId || selectedSectionId;
+    const currentContent = businessPlanData[currentContentKey];
+
+    if (authLoading) {
+        return <div className="flex items-center justify-center h-screen bg-gray-100 text-xl font-semibold">Autenticando...</div>;
+    }
+
+    return (
+        <div className="flex h-screen bg-gray-100 font-inter">
+            <Sidebar
+                sections={SECTIONS}
+                selectedSection={selectedSectionId}
+                selectedSubsection={selectedSubsectionId}
+                onSectionSelect={handleSectionSelect}
+                onSubsectionSelect={setSelectedSubsectionId}
+                userId={userId}
+            />
+            
+            <MainContent
+                section={currentSection}
+                subsection={currentSubsection}
+                content={currentContent}
+                onGenerate={generateContent}
+                onSave={savePlan}
+                status={status}
+                error={planError || authError}
+                clearError={() => setPlanError('')}
+                businessPlanData={businessPlanData}
+            />
+        </div>
+    );
+};
+
+export default App;

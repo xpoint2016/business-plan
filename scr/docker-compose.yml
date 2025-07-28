@@ -1,0 +1,26 @@
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  business-plan-ai:
+    # Nombre de la imagen que se construirá
+    image: business-plan-ai-app
+    # Construye la imagen usando el Dockerfile en el directorio actual
+    build:
+      context: .
+      # Pasa las variables del archivo .env al Dockerfile durante la construcción
+      args:
+        VITE_FIREBASE_CONFIG: ${VITE_FIREBASE_CONFIG}
+        VITE_APP_ID: ${VITE_APP_ID}
+        VITE_INITIAL_AUTH_TOKEN: ${VITE_INITIAL_AUTH_TOKEN}
+    # Archivo que contiene las variables de entorno
+    env_file:
+      - .env
+    # Mapea el puerto 80 del contenedor al puerto 8080 de tu máquina
+    ports:
+      - "8080:80"
+    # Nombre del contenedor para una fácil identificación
+    container_name: business-plan-ai-container
+    # Reinicia el contenedor automáticamente si falla
+    restart: unless-stopped
